@@ -1,50 +1,68 @@
+"""PyTorch implementation of the BioBERT NER model.
+
+This module mirrors the original TensorFlow version by keeping a BERT
+encoder followed by a token classification head, but the underlying
+operations are expressed with PyTorch layers.  The conceptual flow of
+``input -> BERT embeddings -> dropout -> classification`` therefore
+remains unchanged while providing an easy drop‐in replacement.
+"""
+
+from __future__ import annotations
+
 import torch
 from torch import nn
 from transformers.modeling_outputs import TokenClassifierOutput
-from transformers import AutoModel
+from transformers import AutoConfig, AutoModelForTokenClassification
+
 
 class BertNERModel(nn.Module):
-    """PyTorch BioBERT model for token classification.
+    """Thin wrapper around ``AutoModelForTokenClassification``.
 
-    This wrapper uses ``transformers.AutoModel`` to load a pretrained
-    BERT-style encoder and adds a token classification head on top. It
-    provides an interface comparable to the former TensorFlow implementation
-    while leveraging PyTorch modules.
+    The wrapper exposes a minimal ``nn.Module`` style API so that existing
+    training and inference code can interact with it just like the former
+    TensorFlow estimator.  The model parameters (BERT encoder, dropout and
+    classifier) are fully equivalent to the TensorFlow graph; we only swap
+    the backend implementation.
     """
 
     def __init__(self, model_name: str, num_labels: int):
         super().__init__()
-        self.num_labels = num_labels
-        self.bert = AutoModel.from_pretrained(model_name)
-        hidden_size = self.bert.config.hidden_size
-        self.dropout = nn.Dropout(self.bert.config.hidden_dropout_prob)
-        self.classifier = nn.Linear(hidden_size, num_labels)
+        config = AutoConfig.from_pretrained(model_name, num_labels=num_labels)
+        self.model = AutoModelForTokenClassification.from_pretrained(
+            model_name, config=config
+        )
 
-    def forward(self, input_ids, attention_mask=None, token_type_ids=None, labels=None):
+    def forward(
+        self,
+        input_ids,
+        attention_mask=None,
+        token_type_ids=None,
+        labels=None,
+    ):
         """Run a forward pass of the model.
 
-        Args:
-            input_ids: ``torch.LongTensor`` of shape ``(batch, seq_len)``.
-            attention_mask: optional attention mask of the same shape.
-            token_type_ids: optional segment IDs.
-            labels: optional ``torch.LongTensor`` of shape ``(batch, seq_len)``
-                containing label IDs for computing the loss.
-
-        Returns:
-            ``TokenClassifierOutput`` containing ``loss`` (if labels are
-            provided) and ``logits`` of shape ``(batch, seq_len, num_labels)``.
+        The signature mirrors the original TensorFlow implementation to keep
+        the surrounding training code intact.  ``TokenClassifierOutput`` is
+        returned so callers can access both the loss and the logits.
         """
-        outputs = self.bert(
+
+        return self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            labels=labels,
         )
-        sequence_output = self.dropout(outputs.last_hidden_state)
-        logits = self.classifier(sequence_output)
 
-        loss = None
-        if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+    # ``AutoModelForTokenClassification`` already implements ``save_pretrained``
+    # and ``from_pretrained`` methods.  Expose them here to mirror the
+    # TensorFlow checkpoint saving/loading utilities.
+    def save_pretrained(self, save_directory: str):
+        self.model.save_pretrained(save_directory)
 
-        return TokenClassifierOutput(loss=loss, logits=logits)
+    @classmethod
+    def from_pretrained(cls, path: str) -> "BertNERModel":
+        base = AutoModelForTokenClassification.from_pretrained(path)
+        obj = cls.__new__(cls)
+        nn.Module.__init__(obj)
+        obj.model = base
+        return obj

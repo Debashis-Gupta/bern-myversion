@@ -1,4 +1,12 @@
-"""Simplified training script for BioBERT NER using PyTorch."""
+"""Training script for BioBERT NER using PyTorch.
+
+This file mirrors the structure of the original TensorFlow ``run_ner.py``. It
+still reads CoNLL formatted data, constructs a model, trains with an optimizer
+and writes the resulting weights to disk, but the mechanics now rely on
+PyTorch instead of TensorFlow.  The overall training concept therefore
+remains intact.
+"""
+
 import argparse
 from typing import List, Tuple
 
@@ -7,6 +15,7 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 
 from .modeling import BertNERModel
+from .utils import Profile
 
 
 def read_conll(path: str) -> List[Tuple[List[str], List[str]]]:
@@ -71,6 +80,7 @@ class NERDataset(Dataset):
         return len(self.labels)
 
 
+@Profile(__name__)
 def train(model, dataset, batch_size=8, epochs=3):
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
@@ -84,10 +94,30 @@ def train(model, dataset, batch_size=8, epochs=3):
             optimizer.step()
 
 
+@Profile(__name__)
+def evaluate(model, dataset, batch_size=8):
+    """Compute simple token-level accuracy for ``dataset``."""
+
+    loader = DataLoader(dataset, batch_size=batch_size)
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for batch in loader:
+            labels = batch.pop("labels")
+            logits = model(**batch).logits
+            preds = torch.argmax(logits, dim=-1)
+            mask = labels != -100
+            correct += (preds[mask] == labels[mask]).sum().item()
+            total += mask.sum().item()
+    return correct / total if total else 0.0
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", default="bert-base-cased")
     parser.add_argument("--train_file", required=True)
+    parser.add_argument("--dev_file")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=8)
@@ -102,6 +132,13 @@ def main():
 
     model = BertNERModel(args.model_name, num_labels=len(label_list))
     train(model, dataset, batch_size=args.batch_size, epochs=args.epochs)
+
+    if args.dev_file:
+        dev_examples = read_conll(args.dev_file)
+        dev_enc, dev_lab = encode_examples(dev_examples, tokenizer, label2id)
+        dev_dataset = NERDataset(dev_enc, dev_lab)
+        acc = evaluate(model, dev_dataset, batch_size=args.batch_size)
+        print(f"dev accuracy: {acc:.4f}")
 
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
