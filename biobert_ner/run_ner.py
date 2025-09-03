@@ -12,6 +12,9 @@ from __future__ import print_function
 import os
 import threading
 import time
+import tensorflow as tf
+
+tf.compat.v1.disable_v2_behavior()
 
 from biobert_ner.modeling import *
 from biobert_ner.tokenization import *
@@ -21,7 +24,7 @@ from biobert_ner.fast_predict2 import FastPredict
 from convert import preprocess
 
 
-flags = tf.flags
+flags = tf.compat.v1.flags
 
 flags.DEFINE_string(
     "task_name", "NER", "The name of the task to train."
@@ -237,16 +240,16 @@ class NerProcessor(DataProcessor):
 
 def file_based_input_fn_builder(input_file, seq_length, drop_remainder):
     name_to_features = {
-        "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
-        "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
-        "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
-        "label_ids": tf.FixedLenFeature([seq_length], tf.int64),
+        "input_ids": tf.io.FixedLenFeature([seq_length], tf.int64),
+        "input_mask": tf.io.FixedLenFeature([seq_length], tf.int64),
+        "segment_ids": tf.io.FixedLenFeature([seq_length], tf.int64),
+        "label_ids": tf.io.FixedLenFeature([seq_length], tf.int64),
         # "label_ids":tf.VarLenFeature(tf.int64),
         # "label_mask": tf.FixedLenFeature([seq_length], tf.int64),
     }
 
     def _decode_record(record, name_to_features):
-        example = tf.parse_single_example(record, name_to_features)
+        example = tf.io.parse_single_example(record, name_to_features)
         for name in list(example.keys()):
             t = example[name]
             if t.dtype == tf.int64:
@@ -282,18 +285,18 @@ def create_model(bert_config, is_training, input_ids, input_mask,
 
     output_layer = model.get_sequence_output()
 
-    hidden_size = output_layer.shape[-1].value
+    hidden_size = int(output_layer.shape[-1])
 
-    output_weight = tf.get_variable(
+    output_weight = tf.compat.v1.get_variable(
         "output_weights", [num_labels, hidden_size],
-        initializer=tf.truncated_normal_initializer(stddev=0.02)
+        initializer=tf.compat.v1.truncated_normal_initializer(stddev=0.02)
     )
-    output_bias = tf.get_variable(
+    output_bias = tf.compat.v1.get_variable(
         "output_bias", [num_labels], initializer=tf.zeros_initializer()
     )
-    with tf.variable_scope("loss"):
+    with tf.compat.v1.variable_scope("loss"):
         if is_training:
-            output_layer = tf.nn.dropout(output_layer, keep_prob=0.9)
+            output_layer = tf.nn.dropout(output_layer, rate=0.1)
         output_layer = tf.reshape(output_layer, [-1, hidden_size])
         logits = tf.matmul(output_layer, output_weight, transpose_b=True)
         logits = tf.nn.bias_add(logits, output_bias)
@@ -327,20 +330,20 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             create_model(bert_config, is_training, input_ids, input_mask,
                          segment_ids, label_ids, num_labels,
                          use_one_hot_embeddings)
-        tvars = tf.trainable_variables()
+        tvars = tf.compat.v1.trainable_variables()
         scaffold_fn = None
         if init_checkpoint:
             (assignment_map, initialized_variable_names) = \
                 get_assignment_map_from_checkpoint(tvars, init_checkpoint)
             if use_tpu:
                 def tpu_scaffold():
-                    tf.train.init_from_checkpoint(init_checkpoint,
-                                                  assignment_map)
-                    return tf.train.Scaffold()
+                    tf.compat.v1.train.init_from_checkpoint(init_checkpoint,
+                                                            assignment_map)
+                    return tf.compat.v1.train.Scaffold()
 
                 scaffold_fn = tpu_scaffold
             else:
-                tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+                tf.compat.v1.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
         for var in tvars:
             init_string = ""
@@ -349,7 +352,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
         assert mode == tf.estimator.ModeKeys.PREDICT
 
-        output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+        output_spec = tf.compat.v1.estimator.tpu.TPUEstimatorSpec(
             mode=mode,
             predictions={"prediction": predicts, "log_probs": log_probs},
             scaffold_fn=scaffold_fn
@@ -366,7 +369,7 @@ class BioBERT:
 
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-        tf.logging.set_verbosity(tf.logging.INFO)
+        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
 
         bert_config = BertConfig.from_json_file(FLAGS.bert_config_file)
 
@@ -390,12 +393,12 @@ class BioBERT:
         tpu_cluster_resolver = None
         if FLAGS.use_tpu and FLAGS.tpu_name:
             tpu_cluster_resolver = \
-                tf.contrib.cluster_resolver.TPUClusterResolver(
+                tf.distribute.cluster_resolver.TPUClusterResolver(
                     FLAGS.tpu_name, zone=FLAGS.tpu_zone,
                     project=FLAGS.gcp_project)
 
-        is_per_host = tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2
-        session_config = tf.ConfigProto()
+        is_per_host = tf.compat.v1.estimator.tpu.InputPipelineConfig.PER_HOST_V2
+        session_config = tf.compat.v1.ConfigProto()
         session_config.gpu_options.allow_growth = True
 
         self.estimator_dict = dict()
@@ -404,13 +407,13 @@ class BioBERT:
             num_train_steps = None
             num_warmup_steps = None
 
-            run_config = tf.contrib.tpu.RunConfig(
+            run_config = tf.compat.v1.estimator.tpu.RunConfig(
                 cluster=tpu_cluster_resolver,
                 master=FLAGS.master,
                 model_dir=os.path.join(FLAGS.model_dir, etype),
                 session_config=session_config,
                 save_checkpoints_steps=FLAGS.save_checkpoints_steps,
-                tpu_config=tf.contrib.tpu.TPUConfig(
+                tpu_config=tf.compat.v1.estimator.tpu.TPUConfig(
                     iterations_per_loop=FLAGS.iterations_per_loop,
                     num_shards=FLAGS.num_tpu_cores,
                     per_host_input_for_training=is_per_host))
@@ -425,7 +428,7 @@ class BioBERT:
                 use_tpu=FLAGS.use_tpu,
                 use_one_hot_embeddings=FLAGS.use_tpu)
 
-            estimator = tf.contrib.tpu.TPUEstimator(
+            estimator = tf.compat.v1.estimator.tpu.TPUEstimator(
                 use_tpu=FLAGS.use_tpu,
                 model_fn=model_fn,
                 config=run_config,
@@ -664,7 +667,7 @@ class BioBERT:
                                                  output_file, req_id,
                                                  mode='test'):
         features_list = list()
-        writer = tf.python_io.TFRecordWriter(output_file)
+        writer = tf.io.TFRecordWriter(output_file)
         for (ex_index, example) in enumerate(examples):
             feature = self.convert_single_example(example, max_seq_length,
                                                   req_id, mode)
@@ -885,4 +888,4 @@ def main(_):
 
 
 if __name__ == "__main__":
-    tf.app.run()
+    tf.compat.v1.app.run()

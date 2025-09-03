@@ -13,6 +13,7 @@
     Author: Marc Stogaitis
  """
 import tensorflow as tf
+tf.compat.v1.disable_v2_behavior()
 import threading
 from biobert_ner.utils import Profile
 
@@ -78,9 +79,9 @@ def example_input_fn(generator):
     It must take a generator as input """
 
     def _inner_input_fn():
-        dataset = tf.data.Dataset().from_generator(
+        dataset = tf.data.Dataset.from_generator(
             generator, output_types=tf.float32).batch(1)
-        iterator = dataset.make_one_shot_iterator()
+        iterator = tf.compat.v1.data.make_one_shot_iterator(dataset)
         features = iterator.get_next()
         return {'x': features}
 

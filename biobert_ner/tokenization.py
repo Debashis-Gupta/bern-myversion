@@ -25,6 +25,7 @@ import six
 import tensorflow as tf
 
 
+
 def validate_case_matches_checkpoint(do_lower_case, init_checkpoint):
     """Checks whether the casing config is consistent with the checkpoint name."""
 
@@ -123,7 +124,7 @@ def load_vocab(vocab_file):
     """Loads a vocabulary file into a dictionary."""
     vocab = collections.OrderedDict()
     index = 0
-    with tf.gfile.GFile(vocab_file, "r") as reader:
+    with tf.io.gfile.GFile(vocab_file, "r") as reader:
         while True:
             token = convert_to_unicode(reader.readline())
             if not token:
